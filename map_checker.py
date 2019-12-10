@@ -5,9 +5,9 @@ import matplotlib.pyplot as plt
 ## torch module
 import torch 
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
-from torchvision import datasets, transforms
+from torchvision import transforms
+import os
 
 ## user custom dataset
 from torch.utils.data import Dataset, DataLoader
@@ -21,9 +21,8 @@ from os.path import isfile, join
 TRAIN_FOLDER_PATH = "E:\\map_tile_checker"
 ## train var
 TRAIN_DATA_LABEL = ['line', 'square', 'unspecified_shapes', 'dispersion']
-CLASS_COUNT = 4
-TRAIN_BATCH_SIZE = 4
-TRAIN_EPOCH = 1
+TRAIN_BATCH_SIZE = 30
+TRAIN_EPOCH = 50
 TRAIN_LEARINING_LATE = 0.001
 
 
@@ -47,6 +46,13 @@ class CustomDataset(Dataset):
         else:
             return None
 
+    def label_convert(self):
+        label_dict = {}
+        for index, label_item in enumerate(self.label_array):
+            label_dict[label_item] = index
+
+        return label_dict
+
     def convert_data(self):
         all_labels = []
         all_img_file_path = []
@@ -55,7 +61,7 @@ class CustomDataset(Dataset):
         for label_item in self.label_array:
             if(self.data_image_path[label_item] != None):
                 for image_path in self.data_image_path[label_item]:
-                    all_labels.append(label_item)
+                    all_labels.append(self.label_dict[label_item])
                     all_img_file_path.append(
                         os.path.join(self.source_path, label_item, image_path)
                     )
@@ -69,16 +75,14 @@ class CustomDataset(Dataset):
         self.data_image_path = self.init_image_data()
         
         ## 
+        self.label_dict = self.label_convert()
         self.all_label_array, self.all_image_array, self.length = self.convert_data()
         self.num_classes = len(labels)
 
 
     def __getitem__(self, index):
-        #return image, label
-        #image_path = self.data_image_path[label_name][index]
-        #img = Image.open(image_path)
-
         img = Image.open(self.all_image_array[index])
+        img = img.convert("RGB")
         if self.transforms is not None:
             img = self.transforms(img)
 
@@ -90,27 +94,27 @@ class CustomDataset(Dataset):
 
 class CNN_network(nn.Module):
 
-    def __init__(self, label_array):
+    def __init__(self, num_class):
         super(CNN_network, self).__init__()
         
         ## network
         self.start_layer = self.conv_module(3, 16)
-        self.hidden_layer_array = [
-            self.conv_module(16, 32),
-            self.conv_module(32, 64),
-            self.conv_module(64, 128),
-            self.conv_module(128, 256)
-        ]
-        self.last_layer = self.global_avg_pool(256, len(label_array))
-        self.class_num = len(label_array)
+        self.layer_2 = self.conv_module(16, 32)
+        self.layer_3 = self.conv_module(32, 64)
+        self.layer_4 = self.conv_module(64, 128)
+        self.layer_5 = self.conv_module(128, 256)
+        self.last_layer = self.global_avg_pool(256, num_class)
+        self.num_class = num_class
 
     def forward(self, x):
-        ##TODO : network forward
+        ##network forward
         out = self.start_layer(x)
-        for layer_item in self.hidden_layer_array :
-            out = layer_item(out)
+        out = self.layer_2(out)
+        out = self.layer_3(out)
+        out = self.layer_4(out)
+        out = self.layer_5(out)
         out = self.last_layer(out)
-        out.view(-1, len(self.class_num))
+        out = out.view(-1, self.num_class)
 
         return out
 
@@ -120,18 +124,29 @@ class CNN_network(nn.Module):
             nn.Conv2d(in_num, out_num, kernel_size=2, stride=1),
             nn.BatchNorm2d(out_num),
             nn.LeakyReLU(),
-            nn.MaxPool2d(kernel_size=1, stride=1)
+            nn.MaxPool2d(kernel_size=2, stride=2)
         )
-    
 
     def global_avg_pool(self, in_num, out_num):
         return nn.Sequential(
             nn.Conv2d(in_num, out_num, kernel_size=2, stride=1),
             nn.BatchNorm2d(out_num),
             nn.LeakyReLU(),
-            nn.AdaptiveAvgPool2d((1,1))
+            nn.AdaptiveAvgPool2d((1, 1))
         )
 
+
+def get_dataset(label, file_path, transform):
+    return CustomDataset(
+        label, file_path, transforms = transform
+    )
+
+def get_model_output(model, item_set, device):
+    images = data_set['image'].to(device)
+    labels = data_set['label'].to(device)
+    
+    ## network pass
+    return labels, network_model(images)    
 
 
 if __name__ == "__main__":
@@ -153,33 +168,23 @@ if __name__ == "__main__":
     )
 
     #init_train_data()
-    train_data = CustomDataset(
+    train_data = get_dataset(
         TRAIN_DATA_LABEL,
         os.path.join(TRAIN_FOLDER_PATH, 'train_data'),
-        transforms=transforms_train
-    )
+        transforms_train
+    ) 
     train_data_loader = DataLoader(train_data, batch_size = TRAIN_BATCH_SIZE, shuffle = True)
     
-    '''
-    train_data_dump = CustomDataset(
-        TRAIN_DATA_LABEL,
-        os.path.join(TRAIN_FOLDER_PATH, 'train_data_dump'),
-        transforms=transforms_train
-    )
-    train_data_dump_loader = DataLoader(train_data_dump, batch_size = TRAIN_BATCH_SIZE, shuffle = True)
-    '''
-
-    test_data = CustomDataset(
+    test_data = get_dataset(
         TRAIN_DATA_LABEL,
         os.path.join(TRAIN_FOLDER_PATH, 'test_data'),
-        transforms=transforms_test
+        transforms_test
     )
     test_data_loader = DataLoader(test_data, batch_size = TRAIN_BATCH_SIZE, shuffle = True)
 
-
     ## device, network init
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    network_model = CNN_network(TRAIN_DATA_LABEL).to(device)
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    network_model = CNN_network(num_class = len(TRAIN_DATA_LABEL)).to(device)
 
     ## update var
     criterion = nn.CrossEntropyLoss()
@@ -187,12 +192,8 @@ if __name__ == "__main__":
 
     for epoch_count in range(TRAIN_EPOCH):
         for batch_size, data_set in enumerate(train_data_loader):
-            images = data_set['image'].to(device)
-            labels = data_set['label'].to(device)
-
-            ## network pass
-            outputs = network_model(images)
-            loss = criterion(outputs, labels)
+            labels, outputs = get_model_output(network_model, data_set, device)
+            loss = criterion(outputs, labels)  
 
             ## update
             optimizer.zero_grad()
@@ -200,6 +201,20 @@ if __name__ == "__main__":
             optimizer.step()
 
             if (batch_size + 1) % TRAIN_BATCH_SIZE == 0:
-                print(f'Epoch {epoch_count} / {TRAIN_BATCH_SIZE}, Loss : {loss.item():.4f}')
+                print(f'[Epoch {epoch_count} / {TRAIN_EPOCH}], Loss : [{loss.item():.4f}]')
 
 
+
+    network_model.eval()
+    
+    correct = 0
+    total = 0
+
+    for data_set in test_data_loader:
+        labels, outputs = get_model_output(network_model, data_set, device)
+
+        _, predicted = torch.max(outputs.data, 1)
+        total += len(labels)
+        correct += (predicted == labels).sum().item()
+
+        print(f'Test Accuracy of the model on the {total} test images: {100 * correct / total} %')
